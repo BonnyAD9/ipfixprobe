@@ -123,10 +123,9 @@ int HTTPPlugin::post_create(Flow &rec, const Packet &pkt)
 
 int HTTPPlugin::pre_update(Flow &rec, Packet &pkt)
 {
-   RecordExt *ext = nullptr;
+   RecordExt *ext = rec.get_extension(RecordExtHTTP::REGISTERED_ID);
    const char *payload = reinterpret_cast<const char *>(pkt.payload);
    if (is_request(payload, pkt.payload_len)) {
-      ext = rec.get_extension(RecordExtHTTP::REGISTERED_ID);
       if (ext == nullptr) { /* Check if header is present in flow. */
          add_ext_http_request(payload, pkt.payload_len, rec);
          return 0;
@@ -138,13 +137,23 @@ int HTTPPlugin::pre_update(Flow &rec, Packet &pkt)
          return FLOW_FLUSH_WITH_REINSERT;
       }
    } else if (is_response(payload, pkt.payload_len)) {
-      ext = rec.get_extension(RecordExtHTTP::REGISTERED_ID);
       if (ext == nullptr) { /* Check if header is present in flow. */
          add_ext_http_response(payload, pkt.payload_len, rec);
          return 0;
       }
 
       parse_http_response(payload, pkt.payload_len, static_cast<RecordExtHTTP *>(ext));
+      if (flow_flush) {
+         flow_flush = false;
+         return FLOW_FLUSH_WITH_REINSERT;
+      }
+   } else if (is_http2(payload, pkt.payload_len, static_cast<RecordExtHTTP *>(ext))) {
+      if (ext == nullptr) { /* Check if header is present in flow. */
+         add_ext_http2(payload, pkt.payload_len, rec);
+         return 0;
+      }
+
+      parse_http2(payload, pkt.payload_len, static_cast<RecordExtHTTP *>(ext));
       if (flow_flush) {
          flow_flush = false;
          return FLOW_FLUSH_WITH_REINSERT;
@@ -180,7 +189,7 @@ void copy_str(char *dst, ssize_t size, const char *begin, const char *end)
    }
 
    memcpy(dst, begin, len);
-   
+
    if (len >= 1 && dst[len - 1] == '\n') {
       len--;
    }
@@ -214,6 +223,15 @@ bool HTTPPlugin::is_response(const char *data, int payload_len)
    memcpy(chars, data, 4);
    chars[4] = 0;
    return !strcmp(chars, "HTTP");
+}
+
+bool HTTPPlugin::is_http2(const char *data, int payload_len, RecordExtHTTP *rec) {
+   if (payload_len < 5) {
+      return false;
+   }
+
+   return memcmp(data, "PRI *", 5) ||
+         (rec != nullptr && rec->http2);
 }
 
 #ifdef DEBUG_HTTP
@@ -507,6 +525,11 @@ bool HTTPPlugin::parse_http_response(const char *data, int payload_len, RecordEx
    return true;
 }
 
+bool HTTPPlugin::parse_http2(const char *data, int payload_len, RecordExtHTTP *rec) {
+   DEBUG_MSG("TODO: process/http.cpp:%d:: parse_http2\n", __LINE__);
+   return false;
+}
+
 /**
  * \brief Check http method.
  * \param [in] method C string with http method.
@@ -552,6 +575,17 @@ void HTTPPlugin::add_ext_http_response(const char *data, int payload_len, Flow &
    }
 
    if (parse_http_response(data, payload_len, recPrealloc)) {
+      flow.add_extension(recPrealloc);
+      recPrealloc = nullptr;
+   }
+}
+
+void HTTPPlugin::add_ext_http2(const char *data, int payload_len, Flow &flow) {
+   if (recPrealloc == nullptr) {
+      recPrealloc = new RecordExtHTTP();
+   }
+
+   if (parse_http2(data, payload_len, recPrealloc)) {
       flow.add_extension(recPrealloc);
       recPrealloc = nullptr;
    }

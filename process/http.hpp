@@ -86,6 +86,7 @@ struct RecordExtHTTP : public RecordExt {
 
    bool req;
    bool resp;
+   bool http2;
 
    char method[10];
    char host[64];
@@ -104,6 +105,7 @@ struct RecordExtHTTP : public RecordExt {
    {
       req = false;
       resp = false;
+      http2 = false;
       method[0] = 0;
       host[0] = 0;
       uri[0] = 0;
@@ -223,10 +225,13 @@ public:
 private:
    bool is_response(const char *data, int payload_len);
    bool is_request(const char *data, int payload_len);
+   bool is_http2(const char *data, int payload_len, RecordExtHTTP *rec);
    bool parse_http_request(const char *data, int payload_len, RecordExtHTTP *rec);
    bool parse_http_response(const char *data, int payload_len, RecordExtHTTP *rec);
+   bool parse_http2(const char *data, int payload_len, RecordExtHTTP *rec);
    void add_ext_http_request(const char *data, int payload_len, Flow &flow);
    void add_ext_http_response(const char *data, int payload_len, Flow &flow);
+   void add_ext_http2(const char *data, int payload_len, Flow &flow);
    bool valid_http_method(const char *method) const;
 
    RecordExtHTTP *recPrealloc;/**< Preallocated extension. */

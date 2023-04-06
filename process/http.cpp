@@ -64,7 +64,7 @@ __attribute__((constructor)) static void register_this_plugin()
    RecordExtHTTP::REGISTERED_ID = register_extension();
 }
 
-//#define DEBUG_HTTP
+#define DEBUG_HTTP
 
 // Print debug message if debugging is allowed.
 #ifdef DEBUG_HTTP
@@ -125,7 +125,19 @@ int HTTPPlugin::pre_update(Flow &rec, Packet &pkt)
 {
    RecordExt *ext = rec.get_extension(RecordExtHTTP::REGISTERED_ID);
    const char *payload = reinterpret_cast<const char *>(pkt.payload);
-   if (is_request(payload, pkt.payload_len)) {
+
+   if (is_http2(payload, pkt.payload_len, static_cast<RecordExtHTTP *>(ext))) {
+      if (ext == nullptr) { /* Check if header is present in flow. */
+         add_ext_http2(payload, pkt.payload_len, rec);
+         return 0;
+      }
+
+      parse_http2(payload, pkt.payload_len, static_cast<RecordExtHTTP *>(ext));
+      if (flow_flush) {
+         flow_flush = false;
+         return FLOW_FLUSH_WITH_REINSERT;
+      }
+   } else if (is_request(payload, pkt.payload_len)) {
       if (ext == nullptr) { /* Check if header is present in flow. */
          add_ext_http_request(payload, pkt.payload_len, rec);
          return 0;
@@ -143,17 +155,6 @@ int HTTPPlugin::pre_update(Flow &rec, Packet &pkt)
       }
 
       parse_http_response(payload, pkt.payload_len, static_cast<RecordExtHTTP *>(ext));
-      if (flow_flush) {
-         flow_flush = false;
-         return FLOW_FLUSH_WITH_REINSERT;
-      }
-   } else if (is_http2(payload, pkt.payload_len, static_cast<RecordExtHTTP *>(ext))) {
-      if (ext == nullptr) { /* Check if header is present in flow. */
-         add_ext_http2(payload, pkt.payload_len, rec);
-         return 0;
-      }
-
-      parse_http2(payload, pkt.payload_len, static_cast<RecordExtHTTP *>(ext));
       if (flow_flush) {
          flow_flush = false;
          return FLOW_FLUSH_WITH_REINSERT;
@@ -225,12 +226,13 @@ bool HTTPPlugin::is_response(const char *data, int payload_len)
    return !strcmp(chars, "HTTP");
 }
 
-bool HTTPPlugin::is_http2(const char *data, int payload_len, RecordExtHTTP *rec) {
-   if (payload_len < 5) {
+bool HTTPPlugin::is_http2(const char *data, int payload_len, RecordExtHTTP *rec)
+{
+   if (payload_len < 9) {
       return false;
    }
 
-   return memcmp(data, "PRI *", 5) ||
+   return (payload_len >= 24 && memcmp(data, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", 24) == 0) ||
          (rec != nullptr && rec->http2);
 }
 
@@ -525,9 +527,76 @@ bool HTTPPlugin::parse_http_response(const char *data, int payload_len, RecordEx
    return true;
 }
 
-bool HTTPPlugin::parse_http2(const char *data, int payload_len, RecordExtHTTP *rec) {
+
+// http2 frame header
+// +-----------------------------------------------+
+// |                 Length (24)                   |
+// +---------------+---------------+---------------+
+// |   Type (8)    |   Flags (8)   |
+// +-+-------------+---------------+-------------------------------+
+// |R|                 Stream Identifier (31)                      |
+// +=+=============================================================+
+// |                   Frame Payload (0...)                      ...
+// +---------------------------------------------------------------+
+//
+// R: reserved bit
+// Length: length of payload (not including the header)
+
+struct http2_frame_hdr {
+   // length and type
+   uint32_t len_type;
+   uint8_t flags;
+   // reserved bit and stream id
+   uint32_t r_streamid;
+} __attribute__((packed));
+
+bool HTTPPlugin::parse_http2(const char *data, int payload_len, RecordExtHTTP *rec)
+{
    DEBUG_MSG("TODO: process/http.cpp:%d:: parse_http2\n", __LINE__);
-   return false;
+
+   ++total;
+
+   DEBUG_MSG("---------- http parser #%u ----------\n", total);
+   DEBUG_MSG("Parsing HTTP/2.0 packet\n");
+   DEBUG_MSG("Payload length: %d\n\n", payload_len);
+
+   if (payload_len < 9) {
+      DEBUG_MSG("Parser quits:\tpayload length < 9\n");
+      return false;
+   }
+
+   // check if this is the http2 preface
+   if (payload_len >= 24 && memcmp(data, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", 24) == 0) {
+      DEBUG_MSG("Packet is HTTP/2.0 preface\n");
+      rec->http2 = true;
+      return true;
+   }
+
+   auto hdr = (const http2_frame_hdr *)data;
+
+   // 24 MSb are length
+   uint32_t length = ntohl(hdr->len_type) >> 8;
+   // the LSB is type
+   uint8_t type = ntohl(hdr->len_type) & 0xFF;
+   uint8_t flags = hdr->flags;
+   // ignore the reserved bit (MSb)
+   uint32_t stream_id = ntohl(hdr->r_streamid) & INT32_MAX;
+
+   DEBUG_MSG("Frame length:\t%u\n", length);
+   DEBUG_MSG("Frame type:\t%u\n", type);
+   DEBUG_MSG("Frame flags:\t%u\n", flags);
+   DEBUG_MSG("Frame stream id:\t%u\n", stream_id);
+
+   if (payload_len - 9 < length) {
+      DEBUG_MSG("Parser quits:\tpayload too short\n");
+      return false;
+   }
+
+   if (length == 0) {
+      return true;
+   }
+
+   return true;
 }
 
 /**
@@ -580,7 +649,8 @@ void HTTPPlugin::add_ext_http_response(const char *data, int payload_len, Flow &
    }
 }
 
-void HTTPPlugin::add_ext_http2(const char *data, int payload_len, Flow &flow) {
+void HTTPPlugin::add_ext_http2(const char *data, int payload_len, Flow &flow)
+{
    if (recPrealloc == nullptr) {
       recPrealloc = new RecordExtHTTP();
    }

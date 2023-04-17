@@ -545,6 +545,16 @@ bool HTTPPlugin::parse_http_response(const char *data, int payload_len, RecordEx
 struct http2_frame_hdr {
    // length and type
    uint32_t len_type;
+#define HTTP2_FT_DATA 0
+#define HTTP2_FT_HEADERS 1
+#define HTTP2_FT_PRIORITY 2
+#define HTTP2_FT_RST_STREAM 3
+#define HTTP2_FT_SETTINGS 4
+#define HTTP2_FT_PUSH_PROMISE 5
+#define HTTP2_FT_PING 6
+#define HTTP2_FT_GOAWAY 7
+#define HTTP2_FT_WINDOW_UPDATE 8
+#define HTTP2_FT_CONTINUATION 9
    uint8_t flags;
    // reserved bit and stream id
    uint32_t r_streamid;
@@ -594,6 +604,9 @@ bool HTTPPlugin::parse_http2(const char *data, int payload_len, RecordExtHTTP *r
 
    if (length == 0) {
       return true;
+   }
+
+   switch (type) {
    }
 
    return true;

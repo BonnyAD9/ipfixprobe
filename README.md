@@ -635,6 +635,14 @@ The detector search for the SYN SYN-ACK ACK pattern in packet lengths. Multiple 
 |:------------------:|:------:|:---------------------------------------:|
 | SSA_CONF_LEVEL     | uint8  | 1 if SSA sequence detected, 0 otherwise |
 
+### Flow Hash
+
+List of fields exported together with basic flow fields on interface by flow_hash plugin.
+
+| Output field       | Type   | Description                       |
+|:------------------:|:------:|:---------------------------------:|
+| FLOW_ID            | uint64 | Hash of the flow - unique flow id |
+
 ## Simplified function diagram
 Diagram below shows how `ipfixprobe` works.
 
